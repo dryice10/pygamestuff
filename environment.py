@@ -32,6 +32,8 @@ class Character():
         self.maxHp = maxHp
         self.hp = maxHp
         self.color = (20,20,255)
+        self.rewardStep = 0
+        self.rewardTotal = 0
 
     def addHp(self, amount):
         self.hp += amount
@@ -68,6 +70,7 @@ class Character():
     def nearestObs(self):
         distList = []
         typeList = []
+        intList = []
         for area in self.gamestate.areas:
             distList.append(self.distanceA(area))
             typeList.append(area.areaType)
@@ -77,41 +80,60 @@ class Character():
                 typeList.append('char')
         for item in typeList:
             if item == 'char':
-                item = 1
+                intList.append(1)
             elif item == 'wall':
-                item = 2
+                intList.append(2)
             elif item == 'danger':
-                item = 3
+                intList.append(3)
             elif item == 'bush':
-                item = 4
+                intList.append(4)
             elif item == 'fruit':
-                item = 5
+                intList.append(5)
             else:
-                item = 0
-        zipped = zip(distList, typeList)
-        sorted = list(sorted(zipped, key=lambda item: item[0]))
-        return sorted
+                intList.append(0)
+        zipped = zip(distList, intList)
+        sortedList = list(sorted(zipped, key=lambda item: item[0]))
+        return sortedList
 
     def updateObservations(self):
-        #position can be normed to -1,1
-        #distances to 0,1
+        #position and distances can be normed to 0,1
         #labels are ints
 
-        xobs = np.interp(self.x, [0.0, WINDOW_X], [-1, 1])
-        yobs = np.interp(self.y, [0.0, WINDOW_Y], [-1, 1])
-        
+        xobs = np.interp(self.x, [0.0, WINDOW_X], [0, 1])
+        yobs = np.interp(self.y, [0.0, WINDOW_Y], [0, 1])
+        hpobs = np.interp(self.hp, [0.0, self.maxHp], [0, 1])
+
         #distance and labels
-        thingsList = self.nearestObs[:5]
+        thingsList = self.nearestObs()[:6]
         distances, types = zip(*thingsList)
-        distances = list(distances)
+        
+        types = np.array(types)
+        
+        distNormed = []
         for dist in distances:
-            dist = np.interp(dist, [0.0, 500], [0, 1])
-        #######
-        ##TODO
-        ##np.concatenate the vectors
-        #######
-        return
+            distNormed.append(np.interp(dist, [0.0, 500], [0, 1]))
+        
+        distNormed = np.array(distNormed)
+
+        observation = np.concatenate([[xobs,yobs,hpobs],distNormed,types])
+        #print(observation)
+        return observation
     
+    def updateReward(self):
+        #reward = 1 for good hp, reward = 0 for low hp
+        #slight penalty at maxHp to discourage hogging food
+
+        if self.hp == self.maxHp:
+            reward = 0.8
+        elif (self.hp >= 60 and self.hp < self.hp):
+            reward = 1.0
+        elif self.hp < 60:
+            reward = 0.0
+        self.rewardStep = reward
+        self.rewardTotal = self.rewardTotal + self.rewardStep
+        
+        return reward
+
 ### Receives Action ###
 
     def doMove(self, moveVector):
@@ -161,7 +183,7 @@ class Character():
             #eat fruit
             if area.areaType == 'fruit':
                 if self.collideArea(area):
-                    print("ate: "+ str(area))
+                    #print("ate: "+ str(area))
                     self.gamestate.areas.remove(area)
                     area.bush.fruits[area.index] = None
                     self.addHp(10)
@@ -237,7 +259,6 @@ class Fruit(Area):
                 self.index = i
                 x = bush.spots[i][0] + bush.x
                 y = bush.spots[i][1] + bush.y
-                print(bush.fruits)
                 return x, y
             #do a check for character in the way?
         return
@@ -286,7 +307,17 @@ class GameState():
 
 class UserInterface(gym.Env):      ##
     def __init__(self):
-        #self.observation_space = gym.spaces.Box()
+        obs_items = 6
+        self.observation_space = gym.spaces.Tuple(
+            (gym.spaces.Box(low=0.0, high=1.0, shape=(3+obs_items,)),
+             gym.spaces.Tuple((
+                 gym.spaces.Discrete(5),
+                 gym.spaces.Discrete(5),
+                 gym.spaces.Discrete(5),
+                 gym.spaces.Discrete(5),
+                 gym.spaces.Discrete(5),
+                 gym.spaces.Discrete(5)))))
+
         self.action_space = gym.spaces.Box(
             low=-1.0,
             high=1.0,
@@ -305,9 +336,13 @@ class UserInterface(gym.Env):      ##
         self.clock = pygame.time.Clock()
         pygame.display.set_caption("squares")
 
-    # def reset(self):
-    #TODO
-    #     return observation
+    def reset(self):
+        stats = [0.0, 0.0, 0.0]
+        distance = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        types = [0, 0, 0, 0, 0, 0]
+
+        observation = [stats, distance, types]
+        return observation
 
     def step(self, action):
         self.gameState.update()
@@ -315,11 +350,11 @@ class UserInterface(gym.Env):      ##
             if char.selected:
                 if (action[0] != 0 or action[1] != 0):
                     char.doMove(action)
-        # #only send mouse command on click
-        # if self.mouseCommand[2] == True:
-        #     self.gameState.mouseSelect(self.mouseCommand)
-
-        observation, reward, done, info = 0, 0, False, {}
+                observation = char.updateObservations()
+                reward = char.updateReward()
+        
+        #observation, reward, done, info = 0, 0, False, {}
+        done, info = False, {}
         
         return observation, reward, done, info
 
